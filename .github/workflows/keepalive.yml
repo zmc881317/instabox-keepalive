@@ -14,5 +14,23 @@ jobs:
           INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
           INSTABOX_LEASE_TTL: "3600"
           INSTABOX_AUTO_RESUME: "1"
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_NOTIFY_ALL: ${{ vars.TG_NOTIFY_ALL }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          INSTABOX_ENV_FILE=/dev/null sh ./keepalive.sh --once
+          set +e
+          INSTABOX_ENV_FILE=/dev/null sh ./keepalive.sh --once > out.log 2>&1
+          rc=$?
+          cat out.log
+          # 通知：失败 / 被挂起后唤醒 / 手动触发 / TG_NOTIFY_ALL=1 时每次都发
+          notify=0; title="✅ InstaBox 续租成功"
+          if [ $rc -ne 0 ]; then notify=1; title="❌ InstaBox 续租失败"
+          elif grep -q "唤醒" out.log; then notify=1; title="⚠️ InstaBox 机器曾被挂起，已唤醒并续租"
+          elif [ "$IS_MANUAL" = "true" ] || [ "$TG_NOTIFY_ALL" = "1" ]; then notify=1; fi
+          if [ $notify -eq 1 ] && [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            msg=$(printf '%s\n%s\n\n%s' "$title" "$(TZ=Asia/Shanghai date '+%F %T 北京时间')" "$(tail -n 15 out.log)")
+            curl -s -o /dev/null -w 'TG HTTP %{http_code}\n' "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TG_CHAT_ID}" --data-urlencode "text=${msg}"
+          fi
+          exit $rc
